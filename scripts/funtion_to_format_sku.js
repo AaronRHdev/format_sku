@@ -1,80 +1,112 @@
 function onFormSubmit(e){
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Respuestas de formulario 1');
-  const lastRow = sheet.getLastRow(); // Ajustar el nombre al de la hoja de datos
-  const inputCol = 2; // Cambiar este numero si la el campo esta en otra columna (B = 2, C = 3, etc.)
-  
-  // Obtener encabezados
+  const lastRow = sheet.getLastRow();
+  const inputCol = 2;
+
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
 
-  // Verificar si ya existe la columna 'SKU no identificada'
   let invalidCol = headers.indexOf('SKU no identificada') + 1;
-  if(invalidCol === 0){
-    // No existe, crear al final
+  if (invalidCol === 0){
     invalidCol = sheet.getLastColumn() + 1;
     sheet.getRange(1, invalidCol).setValue('SKU no identificada');
   }
 
+  let eanCol = headers.indexOf('EAN identificados') + 1;
+  if (eanCol === 0){
+    eanCol = sheet.getLastColumn() + 1;
+    sheet.getRange(1, eanCol).setValue('EAN identificados');
+  }
 
-  let rawInput= sheet.getRange(lastRow, inputCol).getValue();
+  let upcCol = headers.indexOf('UPC identificado') + 1;
+  if (upcCol === 0){
+    upcCol = sheet.getLastColumn() + 1;
+    sheet.getRange(1, upcCol).setValue('UPC identificado');
+  }
 
-  
-  
-  // 1. Verificar si el campo esta vacio
+  let rawInput = sheet.getRange(lastRow, inputCol).getValue();
+
   if (!rawInput || typeof rawInput !== 'string'){
-    sheet.getRange(lastRow, inputCol).setComment('⚠️ El campo esta vacio o no contiene texto');
+    sheet.getRange(lastRow, inputCol).setComment('⚠️ El campo está vacío o no contiene texto');
     return;
   }
 
-  // 2. Elimina espacio y saltos de linea
-  rawInput = rawInput.replace(/\s+/g, '');
+  rawInput = rawInput.replace(/\s+/g, '').toUpperCase();
 
-  // 3. Verifica si quedo vacio despues de limpiar
   if (rawInput.length === 0){
-    sheet.getRange(lastRow, inputCol).setComment('⚠️ Entrada vacia despues de eliminar espacios.');
+    sheet.getRange(lastRow, inputCol).setComment('⚠️ Entrada vacía después de eliminar espacios.');
     return;
   }
 
-  // 4. Convierte en mayusculas
-  rawInput = rawInput.toUpperCase();
+  const skuPattern = /[A-Z]{4}[0-9]{5}/g;
+  const eanPattern = /\d{13}/g;
+  const upcPattern = /\d{12}/g;
 
-  // 5. Divide en bloques de 9 caracteres
-  const regex9 = /.{9}/g;
-  const allBlocks = rawInput.match(regex9) || [];
+  const allSku = rawInput.match(skuPattern) || [];
 
-  // 6. Validar: 4 letras mayusculas + 5 numeros
-  const validPattern = /^[A-Z]{4}[0-9]{5}$/; // Regex correcta
+  // Paso 1: eliminar los SKU del texto
+  let cleanedText = rawInput;
+  allSku.forEach(code => cleanedText = cleanedText.replace(code, ''));
 
-  const validCodes = [];
-  const invalidCodes = [];
+  // Paso 2: dividir texto restante en fragmentos (mínimo 12 caracteres)
+  let possibleInvalids = cleanedText.match(/.{12,}/g) || [];
 
-  // Separa los registros (validos y no validos)
-  for (let code of allBlocks){
-    if(validPattern.test(code)){
-      validCodes.push(code);
-    } else {
-      invalidCodes.push(code);
+  // Paso 3: evaluar EAN y luego UPC en los fragmentos restantes
+  const detectedEans = [];
+  const detectedUpcs = [];
+  const confirmedInvalids = [];
+
+  for (let fragment of possibleInvalids){
+    let remaining = fragment;
+
+    // Buscar EAN dentro del fragmento
+    const eanMatches = remaining.match(eanPattern) || [];
+    if (eanMatches.length > 0){
+      detectedEans.push(...eanMatches);
+      eanMatches.forEach(ean => {
+        remaining = remaining.replace(ean, '');
+      });
+    }
+
+    // Buscar UPC en el string restante
+    const upcMatches = remaining.match(upcPattern) || [];
+    if (upcMatches.length > 0){
+      detectedUpcs.push(...upcMatches);
+      upcMatches.forEach(upc => {
+        remaining = remaining.replace(upc, '');
+      });
+    }
+
+    // Lo que queda es verdaderamente inválido
+    if (remaining.trim().length > 0){
+      confirmedInvalids.push(remaining);
     }
   }
-  // 7. Si no hay validos, deja nota y termina
-  if(validCodes.length === 0){
-    sheet.getRange(lastRow, inputCol).setComment('⚠️ No se encontraron codigos validos');
-    return;
+
+  // Eliminar duplicados
+  const finalSku = [...new Set(allSku)];
+  const finalEan = [...new Set(detectedEans)];
+  const finalUpc = [...new Set(detectedUpcs)];
+
+  // Guardar SKU
+  if (finalSku.length > 0){
+    sheet.getRange(lastRow, inputCol).setValue(finalSku.join('\n'));
+  } else {
+    sheet.getRange(lastRow, inputCol).setComment('⚠️ No se encontraron SKU válidos');
   }
 
-  // 8. Guarda los validos como lista en la misma celda
-  const finalText = validCodes.join('\n');
-  sheet.getRange(lastRow, inputCol).setValue(finalText);
-
-  // 9. Si hubo datos invalidos, deja un comentario en la celda
-  if(invalidCodes.length > 0) {
-    sheet.getRange(lastRow, inputCol).setComment('⚠️ Melis SKU invalidas ignoradas: ' + invalidCodes.join(', '));
+  // Guardar EAN
+  if (finalEan.length > 0){
+    sheet.getRange(lastRow, eanCol).setValue(finalEan.join('\n'));
   }
 
-  // 10. Guarda los codigos no validos en una nueva columna
-  if (invalidCodes.length > 0){
-    sheet.getRange(lastRow, invalidCol).setValue(invalidCodes.join('\n'));
+  // Guardar UPC
+  if (finalUpc.length > 0){
+    sheet.getRange(lastRow, upcCol).setValue(finalUpc.join('\n'));
+  }
+
+  // Guardar inválidos
+  if (confirmedInvalids.length > 0){
+    sheet.getRange(lastRow, invalidCol).setValue(confirmedInvalids.join('\n'));
+    sheet.getRange(lastRow, inputCol).setComment('⚠️ Algunos códigos fueron ignorados por formato incorrecto');
   }
 }
-
-
-
